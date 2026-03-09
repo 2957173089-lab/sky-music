@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { supabase, hasSupabaseConfig, type SupabaseUser } from './supabaseClient';
+import { supabase, hasSupabaseConfig, backendClient, hasBackendConfig, type SupabaseUser } from './supabaseClient';
 
 // ═══════════════════════════════════════════
 // Types
@@ -385,6 +385,11 @@ interface Store {
   authLoading: boolean;
   authError: string;
 
+  // Backend auth
+  backendUser: { id: number; email: string; username: string } | null;
+  backendAuthLoading: boolean;
+  backendAuthError: string;
+
   initAudio: () => void;
   initApi: () => Promise<void>;
   setCustomApi: (url: string) => Promise<void>;
@@ -414,15 +419,25 @@ interface Store {
   clearQueue: () => void;
   setPlayMode: (mode: 'sequence' | 'random' | 'single') => void;
 
-  // Auth
+  // Auth - Supabase
   signUp: (email: string, password: string) => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   loadSession: () => Promise<void>;
 
+  // Auth - Backend
+  backendSignUp: (email: string, username: string, password: string) => Promise<void>;
+  backendSignIn: (email: string, password: string) => Promise<void>;
+  backendSignOut: () => Promise<void>;
+  loadBackendSession: () => Promise<void>;
+
   // Cloud sync (noop if no Supabase)
   syncFavoritesToCloud: () => Promise<void>;
   syncPlaylistsToCloud: () => Promise<void>;
+
+  // Backend sync
+  syncToBackend: () => Promise<void>;
+  syncFromBackend: () => Promise<void>;
 }
 
 let skipCount = 0;
@@ -449,6 +464,7 @@ export const useStore = create<Store>((set, get) => ({
   },
   lyrics: [], currentLyricIndex: 0, showLyricsView: false, setShowLyricsView: (s) => set({ showLyricsView: s }),
   user: null, authLoading: false, authError: '',
+  backendUser: null, backendAuthLoading: false, backendAuthError: '',
 
   initApi: async () => {
     set({ apiStatus: 'checking', probeLogs: [] });
@@ -801,26 +817,22 @@ export const useStore = create<Store>((set, get) => ({
   // Auth implementations (basic email/password, max 10 users)
   signUp: async (email, password) => {
     if (!supabase || !hasSupabaseConfig) {
-      get().showToast('\u8fd8\u672a\u914d\u7f6e Supabase');
+      get().showToast('未配置 Supabase');
       return;
     }
     set({ authLoading: true, authError: '' });
     try {
-      // 备注：如果这里没有自定义的 users 或 profiles 表，这里可以做个简单的跳过或报错处理
-      // 实际上我们这里假设服务端已有对应的 trigger/限制 或者我们仅靠前端拦截做演示
-      // 此处为了避免在未建表的情况下报错，我们将直接允许注册，
-      // 如果后端需要真正限制10人，请在 Supabase 的 Auth 配置中关闭随意注册或通过 Edge Function 实现。
       const { data, error } = await supabase.auth.signUp({ email, password });
       if (error) throw error;
       set({ user: data.user ?? null, authLoading: false });
-      get().showToast('\u6ce8\u518c\u6210\u529f');
+      get().showToast('注册成功');
     } catch (e: any) {
       set({ authLoading: false, authError: e?.message || 'Supabase error' });
     }
   },
   signIn: async (email, password) => {
     if (!supabase || !hasSupabaseConfig) {
-      get().showToast('\u8fd8\u672a\u914d\u7f6e Supabase');
+      get().showToast('未配置 Supabase');
       return;
     }
     set({ authLoading: true, authError: '' });
@@ -828,7 +840,7 @@ export const useStore = create<Store>((set, get) => ({
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
       set({ user: data.user ?? null, authLoading: false });
-      get().showToast('\u767b\u5f55\u6210\u529f');
+      get().showToast('登录成功');
     } catch (e: any) {
       set({ authLoading: false, authError: e?.message || 'Supabase error' });
     }
@@ -860,6 +872,171 @@ export const useStore = create<Store>((set, get) => ({
     const pls = get().userPlaylists;
     await supabase.from('playlists').upsert({ user_id: u.id, data: pls });
   },
+
+  // Backend Auth
+  backendSignUp: async (email, username, password) => {
+    if (!backendClient || !hasBackendConfig) {
+      get().showToast('未配置后端服务');
+      return;
+    }
+    set({ backendAuthLoading: true, backendAuthError: '' });
+    try {
+      const { data, error } = await backendClient.register(email, username, password);
+      if (error) throw new Error(error.message);
+      set({ backendUser: data, backendAuthLoading: false });
+      get().showToast('注册成功');
+    } catch (e: any) {
+      set({ backendAuthLoading: false, backendAuthError: e?.message || '注册失败' });
+    }
+  },
+  backendSignIn: async (email, password) => {
+    if (!backendClient || !hasBackendConfig) {
+      get().showToast('未配置后端服务');
+      return;
+    }
+    set({ backendAuthLoading: true, backendAuthError: '' });
+    try {
+      const { data, error } = await backendClient.login(email, password);
+      if (error) throw new Error(error.message);
+      set({ backendUser: data, backendAuthLoading: false });
+      get().showToast('登录成功');
+    } catch (e: any) {
+      set({ backendAuthLoading: false, backendAuthError: e?.message || '登录失败' });
+    }
+  },
+  backendSignOut: async () => {
+    if (!backendClient || !hasBackendConfig) {
+      set({ backendUser: null });
+      return;
+    }
+    await backendClient.logout();
+    set({ backendUser: null });
+  },
+  loadBackendSession: async () => {
+    const userId = localStorage.getItem('sky_user_id');
+    const username = localStorage.getItem('sky_username');
+    const email = localStorage.getItem('sky_email');
+    
+    if (userId && username && email) {
+      set({
+        backendUser: {
+          id: parseInt(userId),
+          username,
+          email
+        }
+      });
+    }
+  },
+
+  // Backend Sync
+  syncToBackend: async () => {
+    if (!backendClient || !hasBackendConfig) return;
+    const { backendUser, likedSongs, userPlaylists, playHistory } = get();
+    if (!backendUser) return;
+    
+    try {
+      await backendClient.syncData({
+        favorites: likedSongs.map(s => ({
+          id: s.id,
+          name: s.name,
+          artist: s.artist,
+          album: s.album,
+          cover: s.cover,
+          duration: s.duration
+        })),
+        playlists: userPlaylists.map(p => ({
+          id: parseInt(p.id),
+          name: p.name,
+          songs: p.songs.map(s => ({
+            id: s.id,
+            name: s.name,
+            artist: s.artist,
+            album: s.album,
+            cover: s.cover,
+            duration: s.duration
+          }))
+        })),
+        history: playHistory.slice(0, 100).map(s => ({
+          id: s.id,
+          name: s.name,
+          artist: s.artist,
+          album: s.album,
+          cover: s.cover,
+          duration: s.duration
+        }))
+      });
+      get().showToast('数据同步成功');
+    } catch (e: any) {
+      get().showToast(`同步失败: ${e.message}`);
+    }
+  },
+
+  syncFromBackend: async () => {
+    if (!backendClient || !hasBackendConfig) return;
+    const { backendUser } = get();
+    if (!backendUser) return;
+    
+    try {
+      const { data, error } = await backendClient.getSyncData();
+      if (error) throw new Error(error.message);
+      
+      if (data) {
+        // Merge favorites
+        const backendFavorites = new Set(data.favorites?.map((s: any) => s.id) || []);
+        const newFavorites = [...data.favorites?.map((s: any) => ({
+          id: s.id,
+          name: s.name,
+          artist: s.artist,
+          album: s.album || '',
+          cover: s.cover || '',
+          duration: s.duration || 0
+        })) || [], ...get().likedSongs.filter(s => !backendFavorites.has(s.id))];
+        set({ likedSongs: newFavorites });
+        saveJSON('sky_liked', newFavorites);
+        
+        // Merge playlists
+        const backendPlaylistIds = new Set(data.playlists?.map((p: any) => p.id) || []);
+        const newPlaylists = [
+          ...data.playlists?.map((p: any) => ({
+            id: p.id.toString(),
+            name: p.name,
+            songs: p.songs?.map((s: any) => ({
+              id: s.id,
+              name: s.name,
+              artist: s.artist,
+              album: s.album || '',
+              cover: s.cover || '',
+              duration: s.duration || 0
+            })) || [],
+            createdAt: Date.now()
+          })) || [],
+          ...get().userPlaylists.filter(p => !backendPlaylistIds.has(parseInt(p.id)))
+        ];
+        set({ userPlaylists: newPlaylists });
+        saveJSON('sky_playlists', newPlaylists);
+        
+        // Merge history
+        const backendHistoryIds = new Set(data.history?.map((s: any) => s.id) || []);
+        const newHistory = [
+          ...data.history?.map((s: any) => ({
+            id: s.id,
+            name: s.name,
+            artist: s.artist,
+            album: s.album || '',
+            cover: s.cover || '',
+            duration: s.duration || 0
+          })) || [],
+          ...get().playHistory.filter(s => !backendHistoryIds.has(s.id))
+        ].slice(0, 100);
+        set({ playHistory: newHistory });
+        saveJSON('sky_history', newHistory);
+        
+        get().showToast('数据同步成功');
+      }
+    } catch (e: any) {
+      get().showToast(`同步失败: ${e.message}`);
+    }
+  }
 }));
 
 // ═══════════════════════════════════════════

@@ -412,7 +412,10 @@ function PlaylistsPage() {
 
 // ─── Me Page (Profile & Auth) ───
 function MePage() {
-  const { user, signUp, signIn, signOut, authLoading, authError, syncFavoritesToCloud, syncPlaylistsToCloud, likedSongs, userPlaylists, playHistory, setView } = useStore();
+  const { user, signUp, signIn, signOut, authLoading, authError, syncFavoritesToCloud, syncPlaylistsToCloud, 
+          backendUser, backendSignIn, backendSignOut, backendAuthLoading, backendAuthError,
+          syncToBackend, syncFromBackend,
+          likedSongs, userPlaylists, playHistory, setView } = useStore();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLogin, setIsLogin] = useState(true);
@@ -450,7 +453,34 @@ function MePage() {
         </button>
       </div>
 
-      {user ? (
+      {backendUser ? (
+        <>
+          <div className="glass rounded-2xl p-5 mb-6 flex items-center gap-4">
+            <div className="w-14 h-14 rounded-full bg-gradient-to-br from-blue-400 to-indigo-400 flex items-center justify-center shadow-lg text-white font-bold text-xl">
+              {backendUser.email?.[0].toUpperCase() || 'U'}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-slate-800 font-semibold text-base truncate">{backendUser.email}</p>
+              <p className="text-slate-400 text-xs mt-0.5">已登录并开启云同步</p>
+            </div>
+            <button onClick={backendSignOut} disabled={backendAuthLoading} className="px-3 py-1.5 rounded-xl bg-red-50 text-red-500 text-xs font-medium hover:bg-red-100 transition">
+              {backendAuthLoading ? <Loader2 size={12} className="animate-spin" /> : '退出'}
+            </button>
+          </div>
+
+          <div className="glass rounded-2xl p-4 mb-6 space-y-2">
+            <h3 className="text-slate-700 text-xs font-semibold mb-2 px-1">数据同步</h3>
+            <button onClick={syncToBackend} disabled={backendAuthLoading} className="w-full text-left px-4 py-3 rounded-xl bg-white/40 hover:bg-white/60 transition flex items-center justify-between group">
+              <span className="text-slate-600 text-sm">同步到服务器</span>
+              <RefreshCw size={14} className={`text-blue-500 group-hover:rotate-180 transition-transform ${backendAuthLoading ? 'animate-spin' : ''}`} />
+            </button>
+            <button onClick={syncFromBackend} disabled={backendAuthLoading} className="w-full text-left px-4 py-3 rounded-xl bg-white/40 hover:bg-white/60 transition flex items-center justify-between group">
+              <span className="text-slate-600 text-sm">从服务器同步</span>
+              <RefreshCw size={14} className={`text-blue-500 group-hover:rotate-180 transition-transform ${backendAuthLoading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+        </>
+      ) : user ? (
         <>
           <div className="glass rounded-2xl p-5 mb-6 flex items-center gap-4">
             <div className="w-14 h-14 rounded-full bg-gradient-to-br from-blue-400 to-indigo-400 flex items-center justify-center shadow-lg text-white font-bold text-xl">
@@ -878,8 +908,8 @@ function Toast() {
 
 // ─── App ───
 export default function App() {
-  const { currentView, initAudio, initApi, currentSong, loadSession } = useStore();
-  useEffect(() => { initAudio(); initApi(); loadSession(); }, [initAudio, initApi, loadSession]);
+  const { currentView, initAudio, initApi, currentSong, loadSession, loadBackendSession } = useStore();
+  useEffect(() => { initAudio(); initApi(); loadSession(); loadBackendSession(); }, [initAudio, initApi, loadSession, loadBackendSession]);
   const renderPage = () => {
     switch (currentView) {
       case 'search': return <SearchPage />;
